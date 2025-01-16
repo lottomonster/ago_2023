@@ -1,0 +1,571 @@
+---
+title: "AGO Data Challenge"
+author: "Nicholas Chung"
+date: "2023-09-08"
+output:
+  word_document: default
+---
+
+```{r setup, include=FALSE,echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r, echo=FALSE}
+library(dplyr)
+library(data.table)
+##To deal with dates, need tidyverse package. Install it only once if you haven't
+#install.packages("tidyverse")
+library(lubridate)
+col_names=c("SN","Code","Type","Agency","Description","Date","Supplier","Amount")
+
+#Load csv using fread into a dataframe
+df<-fread("../data/DC23 Prelim Round Dataset (Final).csv",skip=1,header=FALSE,col.names=col_names)
+
+##See the structure
+str(df)
+
+##Turn Type, Agency, Description into factors
+df$Type<-as.factor(df$Type)
+df$Agency<-as.factor(df$Agency)
+df$Description<-as.factor(df$Description)
+df$Supplier<-as.factor(df$Supplier)
+
+##Convert date into date class and datetime format. Add year, month, and day rows
+df$Date<-dmy(df$Date)
+df$Year<-as.integer(year(df$Date))
+df$Month<-as.integer(month(df$Date))
+df$Day<-mday(df$Date)
+
+
+##Remove $ and , sign in amount and convert to numeric
+df$Amount<-gsub('\\$','',df$Amount)
+df$Amount<-gsub(',','',df$Amount)
+df$Amount<-as.numeric(df$Amount)
+
+new_df<-df
+
+# str(df)
+# # 
+# head(df)
+
+```
+
+# Anomaly Finding
+
+## Checking the Validity of Dates
+
+```{r,echo=FALSE}
+##Find any missing/NA values first. Don't have so can continue :)
+
+#sum(is.na(df$Month))
+
+```
+
+There is 1 row, SN 1 that had its procurement date before 2017.
+
+```{r,echo=FALSE}
+##Check for dates that lie outside of 2017-2022, and filter dates
+
+
+before_2017<-new_df[year(Date)<2017,]
+before_2017<-subset(before_2017,select=-c(Year,Month,Day))
+before_2017
+
+```
+
+There are 2 rows, SN6999 and SN7000 that have their procurement dates in 2023 and 2024 respectively.
+
+```{r,echo=FALSE}
+
+after_2022<-new_df[year(Date)>2022,]
+after_2022<-subset(after_2022,select=-c(Year,Month,Day))
+after_2022
+
+```
+
+The above three data points should not be considered as the dataset covers awards between 1 January 2017 and 31 December 2022.
+
+```{r,echo=FALSE}
+
+df<-df %>% filter(between(df$Date, as.Date('2017-01-01'), as.Date('2022-12-31')))
+#head(df)
+#tail(df)
+
+##Check that dates are valid (RESOLVED)
+# Previous error was due to the y, m, d values being "NA", hence leading to the 
+# "missing value where TRUE/FALSE needed" error
+
+date_checker <- function(y,m,d){
+  months_31 = c(1,3,5,7,8,10,12)
+  months_30 = c(4,6,9,11)
+  
+  if (m == 2){
+    if (y %% 4 == 0){
+      return(ifelse(between(d,1,29),TRUE,FALSE))
+    } else {
+      return(ifelse(between(d,1,28),TRUE,FALSE))
+    }
+  } else if (m %in% months_31){
+     return(ifelse(between(d,1,31),TRUE,FALSE))
+  } else if (m %in% months_30){
+    return(ifelse(between(d,1,30),TRUE,FALSE))
+  } else {
+    return(FALSE)
+  }
+}
+
+validity <- c()
+rows <- dim(df)[1]
+for (i in 1:rows){
+  y = df[i,"Year"]
+  m = df[i,"Month"]
+  d = df[i,"Day"]
+  validity <- append(validity, date_checker(y, m, d))
+  next
+}
+
+sum(validity) == length(validity)
+# All the dates in the data set are valid
+
+```
+```{r,echo=FALSE}
+
+##Check for repeated procurement codes. Zero so nothing to report here
+
+duplicated_codes<-sum(duplicated(df$Code))
+#duplicated_codes
+
+##Checked that all procurement codes have same length (are valid)
+
+code_length<-as.factor(nchar(df$Code))
+#code_length
+
+##Check that all procurement codes have correct format. All fit the format (3 alphabets + 8 numeric)
+
+wrong_code_format<-df[!grep("[[:alpha:]]{3}[0-9]{8}",df$Code),]
+
+#wrong_code_format
+
+##Check if procurement type matches procurement code initials. Also zero so nothing to report here
+proc_init_checker<-function(proc_code,proc_type){
+  proc_code_initial=substring(proc_code,1,3)
+  ifelse (proc_code_initial==proc_type,TRUE,FALSE)
+}
+
+type_code_unmatch<-sum(!proc_init_checker(df$Code,df$Type))
+#type_code_unmatch
+
+##Check the 20 different factors in Description. See if any similar ones but written differently. All seem different enough so
+
+#levels(df$Description)
+
+##Check for unique Supplier (i.e. whether any was awarded to more than one supplier)
+
+#unique(df$Supplier)
+
+```
+
+## Checking the Amount Awarded for ITT and ITQ
+
+There are 10 projects listed in ITQ that fall below $10,000 in amount awarded.
+
+```{r,echo=FALSE}
+
+##Check amount awarded if it falls within ITT, ITQ range respectively. Only got ITQ below 10k
+df_itt<-df[df$Type=="ITT",]
+df_itq<-df[df$Type=="ITQ",]
+
+# str(df_itt)
+# str(df_itq)
+
+
+itq_above_100k<-df_itq[df_itq$Amount>100000,]
+#itq_above_100k
+itq_below_10k<-df_itq[df_itq$Amount<=10000,]
+itq_below_10k<-subset(itq_below_10k,select=-c(Year,Month,Day))
+
+itq_below_10k
+
+itt_below_100k<-df_itt[df_itt$Amount<=100000,]
+#itt_below_100k
+
+##Question: Should we remove the ITQ below 10k? Or add it to recommendations saying that these should use SVP instead? Because the document doesn't explicitly state that below 10k cannot use ITQ
+
+```
+
+While it is odd that projects below $10,000 are going through ITQ instead of SVP, ITQ does not have a minimum threshold unlike ITT, hence we will keep these data points for our analysis.
+
+```{r,echo=FALSE}
+
+
+
+##Create function that checks for rows with same date and same amount awarded, if same check if both are similar enough to be duplicates. Checked that there are none.
+
+
+same_date <- df %>% filter(duplicated(df$Date))
+
+same_date_amt <-same_date %>% filter(duplicated(same_date$Amount))
+
+same_date_amt<-same_date_amt[order(same_date_amt$Date,same_date_amt$Amount),]
+
+same_date_amt<-same_date_amt[order(same_date_amt$Amount,same_date_amt$Date),]
+
+#same_date_amt
+
+```
+
+# General Analysis
+
+There are 15 different agencies, 20 different procurement description types, and 98 different suppliers, spread across 6997 different projects.
+
+```{r,echo=FALSE}
+
+#levels(df$Agency)
+
+```
+```{r,echo=FALSE}
+
+#levels(df$Description)
+
+```
+
+The following are the top 10 suppliers in terms of number of projects.
+
+```{r,echo=FALSE}
+total_agency_projects<-df %>% count(Agency)
+
+colnames(total_agency_projects)<-c("Agency","Number of Projects")
+
+total_agency_projects<-total_agency_projects[order(total_agency_projects$`Number of Projects`,decreasing=TRUE),]
+
+head(total_agency_projects,n=10)
+
+tail(total_agency_projects,n=5)
+
+```
+The following are the top 10 suppliers in terms of number of projects.
+
+```{r,echo=FALSE}
+
+total_supplier_projects<-df %>% count(Supplier)
+
+colnames(total_supplier_projects)<-c("Supplier","Number of Projects")
+
+total_supplier_projects<-total_supplier_projects[order(total_supplier_projects$`Number of Projects`,decreasing=TRUE),]
+
+head(total_supplier_projects,n=10)
+
+tail(total_supplier_projects,n=5)
+
+```
+
+We also observe that the median amount awarded is $240,989, and the mean is $250,870.It is also interesting that the maximum amount awarded is very much higher than the 3rd quartile, at over $3.7 million.
+
+```{r,echo=FALSE}
+amount_df<-summary(df$Amount)
+amount_df
+
+```
+There are 5 projects that go above $1 million in amount awarded. These are overly represented by the Bureau of Urban Development and Infrastructure as the procurement agency, at 4 out of the 5 projects.
+
+```{r,echo=FALSE}
+
+over_onemil<-df[df$Amount>=1000000,]
+
+over_onemil<-subset(over_onemil,select=c(SN,Agency,Description,Date,Amount))
+
+over_onemil
+
+```
+Looking further into the Bureau of Urban Development and Infrastructure (BUDI), we find that they have 139 different procurements. The median procurement amount of procurements awarded by BUDI is $226,170, which is actually lower than the overall median procurement amount.
+```{r,echo=FALSE}
+
+budi<-df[df$Agency=="Bureau of Urban Development and Infrastructure",]
+
+summary(budi$Amount)
+
+```
+
+```{r,echo=FALSE}
+library(tidyverse)
+#install.packages("broom")
+library(broom)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+```
+## Correlation between Agency and Description
+
+We first try to find the needs of the agencies in terms of procurement description categories. 
+
+```{r,echo=FALSE}
+df_agency_description<-data.frame(df$Agency,df$Description)
+
+colnames(df_agency_description)<-c("Agency","Description")
+
+
+total_projects_agency_2<-df_agency_description %>% count(Agency)
+
+df_agency_description<-count(df_agency_description,Agency,Description,name="Freq")
+
+df_agency_description$Total<-0
+
+for (i in 1:299){
+  for (j in 1:15){
+    if (total_projects_agency_2[j,1]==df_agency_description[i,1]){
+      df_agency_description[i,4]=total_projects_agency_2[j,2]
+    }
+  }
+}
+
+
+df_agency_description$Perc<-df_agency_description$Freq/df_agency_description$Total*100
+
+df_agency_description<-df_agency_description[order(df_agency_description$Perc,decreasing=TRUE),]
+
+```
+
+On average, one procurement description category takes approximately 5% of an agency's total procurement needs. This translates to about 20 different procurement description categories undetaken by one agency, meaning most agencies require a wide variety of procurements. It is also interesting to note that the maximum percentage recorded is 13.7%. This means that there are no agencies with an overwhelming focus on one particular procurement description category.
+
+```{r,echo=FALSE}
+
+agency_description_summary<-summary(df_agency_description$Perc)
+
+agency_description_summary
+
+```
+The dotplot below also corroborates our above findings.
+
+```{r,echo=FALSE}
+
+x_labels=c("ACPH","BNSI","BUDI","CEG","DATR","DECS","DPHDC","FAEP","ISJE","MSEP","NCSE","NCTF","NISA","OIRDA","OPSEM")
+
+
+ggplot(df_agency_description,aes(x=Agency,y=Perc))+geom_dotplot(binaxis='y', stackdir='center',dotsize=0.5)+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+scale_x_discrete(labels=x_labels)+labs(y="Percentage of Procurement Description")+ggtitle("Perc of Proc. Desc. Types by Agency, 2017-2022")
+
+
+```
+
+# Correlation between Supplier and Description
+
+Now we look at the different suppliers and what type of services they provide (based on the procurement description).
+
+```{r,echo=FALSE}
+
+df_supplier_description<-data.frame(df$Supplier,df$Description)
+
+colnames(df_supplier_description)<-c("Supplier","Description")
+
+
+total_projects_supplier<-df_supplier_description %>% count(Supplier)
+
+df_supplier_description<-count(df_supplier_description,Supplier,Description,name="Freq")
+
+df_supplier_description$Total<-0
+
+
+for (i in 1:1766){
+  for (j in 1:98){
+    if (total_projects_supplier[j,1]==df_supplier_description[i,1]){
+      df_supplier_description[i,4]=total_projects_supplier[j,2]
+    }
+  }
+}
+
+df_supplier_description$Perc<-df_supplier_description$Freq/df_supplier_description$Total*100
+
+df_supplier_description<-df_supplier_description[order(df_supplier_description$Perc,decreasing=TRUE),]
+
+summary(df_supplier_description$Perc)
+
+```
+```{r,echo=FALSE}
+
+ggplot(df_supplier_description,aes(x=Supplier,y=Perc))+geom_dotplot(binaxis='y', stackdir='center',dotsize=0.5)+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+theme(axis.text.x = element_blank())+labs(y="Percentage of Procurement Description")+ggtitle("Perc. of Proc. Desc. Types by Supplier, 2017-2022")
+
+```
+
+The data and boxplot above shows that most suppliers are diverse in the services they provide, as one category of procurement description accounts for about 5% of the total number of projects done by the supplier. Although there are some values that cross 20%, of particular interest to us in the data point hovering at about 80%.
+
+```{r,echo=FALSE}
+
+
+head(df_supplier_description,n=1)
+
+```
+The data point in question belongs to Infinite Building Solutions. We want to look at the share of other projects that this supplier takes on. We look at the top 3 and bottom 3 procurement description categories done by this supplier.
+```{r,echo=FALSE}
+
+df_infinitespace<-df_supplier_description %>% filter(Supplier=="InfiniteSpace Building Solutions")
+
+rbind(head(df_infinitespace,n=3),tail(df_infinitespace,n=3))
+
+```
+
+We observe that there are 19 different procurement description types that the supplier takes on, but the other 18 types take between 0.4%-2.1% share of the projects done by said supplier. This means that the supplier can perform a lot of different projects, but only "Cleaning supplies and consumables procurement and management" is heavily preferred by agencies for this supplier.
+
+# Correlation Between Agency and Supplier
+
+Finally, we also want to analyse if there are agencies that are particularly reliant on a particular supplier for their needs.
+
+```{r,echo=FALSE}
+
+df_agency_supplier<-data.frame(df$Agency,df$Supplier)
+
+colnames(df_agency_supplier)<-c("Agency","Supplier")
+
+total_projects_agency<-df_agency_supplier %>% count(Agency)
+
+
+df_agency_supplier<-count(df_agency_supplier,Agency,Supplier,name="Freq")
+
+df_agency_supplier$Total<-0
+
+
+for (i in 1:1349){
+  for (j in 1:15){
+    if (total_projects_agency[j,1]==df_agency_supplier[i,1]){
+      df_agency_supplier[i,4]=total_projects_agency[j,2]
+    }
+  }
+}
+
+df_agency_supplier$Perc<-df_agency_supplier$Freq/df_agency_supplier$Total*100
+
+df_agency_supplier<-df_agency_supplier[order(df_agency_supplier$Perc,decreasing=TRUE),]
+
+summary(df_agency_supplier$Perc)
+
+```
+```{r,echo=FALSE}
+
+x_labels=c("ACPH","BNSI","BUDI","CEG","DATR","DECS","DPHDC","FAEP","ISJE","MSEP","NCSE","NCTF","NISA","OIRDA","OPSEM")
+
+ggplot(df_agency_supplier,aes(x=Agency,y=Perc))+geom_dotplot(binaxis='y', stackdir='center',dotsize=0.5)+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+scale_x_discrete(labels=x_labels)+labs(y="Share of Agency's Projects")+ggtitle("Supplier Rep. in Proj. by Agency, 2017-2022")
+
+
+```
+From the data above, it is apparent that most agencies do not over rely on one particular supplier, as one supplier only takes a share of about 1% of an agency's total procurements.
+
+However, there is one data point that is above 30%, which we shall further scrutinise.
+
+```{r,echo=FALSE}
+
+
+head(df_agency_supplier,n=1)
+
+```
+The data point in question belongs to the National Commission for Space Exploration, and the supplier in question is SecureSpace Management. 
+
+We shall now look into how many different suppliers the National Commission for Space Exploration engages to check for any overreliance on their suppliers.
+
+```{r,echo=FALSE}
+
+df_ncse<-df_agency_supplier %>% filter(Agency=="National Commission for Space Exploration")
+
+rbind(head(df_ncse,n=3),tail(df_ncse,n=3))
+
+```
+
+We observe that there are 91 different suppliers that the agency engages, but the other 90 suppliers take between 0.1%-2.7% share of the procurements by the agency. This means that the agency does engage a wide range of suppliers, but SecureSpace Management in particular takes a significantly larger share of their procurements.We observe that there are 91 different suppliers that the agency engages, but the other 90 suppliers take between 0.1%-2.7% share of the procurements by the agency. This means that the agency does engage a wide range of suppliers, but SecureSpace Management in particular takes a significantly larger share of their procurements.
+
+```{r,echo=FALSE}
+
+n_df_ncse<-df %>% filter(Agency=="National Commission for Space Exploration",Supplier=="SecureSpace Management")
+
+n_df_ncse<-count(n_df_ncse,Description,name="Freq")
+
+n_df_ncse<-n_df_ncse[order(n_df_ncse$Freq,decreasing=TRUE),]
+
+n_df_ncse
+
+
+```
+
+The above table shows the type of projects done by SecureSpace Management and are procured by the National Commission for Space Exploration (NCSE). These are spread across 19 different procurement description categories, which means that NCSE is significantly more reliant on SecureSpace Management for a large number of their different needs.
+
+
+```{r,echo=FALSE}
+
+##Get number of ITQ entries
+
+#nrow(distinct(df_itq))
+
+##Get mean, median of ITQ amount
+
+#summary(df_itq$Amount)
+
+```
+
+```{r,echo=FALSE}
+
+##ITQ Procurement Description Analysis, 2017-2022
+# 
+# itq_description<- df_itq 
+# 
+# itq_description_summary<-as.factor(itq_description$Description)
+# 
+# itq_description_summary<-as.data.frame(summary(itq_description$Description))
+# 
+# descriptions<-c(levels(itq_description$Description))
+# 
+# desc_counts<-itq_description_summary[,1]
+# 
+# itq_description_summary<-cbind(`Procurement Description`=descriptions,Count=desc_counts)
+# 
+# itq_description_summary<-as.data.frame(itq_description_summary)
+# 
+# itq_description_summary$Count<-as.numeric(itq_description_summary$Count)
+# 
+# itq_description_summary<-itq_description_summary[order(itq_description_summary$Count,decreasing=TRUE),]
+# 
+# 
+# 
+# top_10_itq_description<-head(itq_description_summary,n=10)
+# 
+# 
+# ggplot(data=top_10_itq_description,aes(x=reorder(`Procurement Description`,-Count), y=Count))+geom_bar(stat="identity")+geom_text(aes(label = Count), vjust = 1.5, colour = "white")+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+labs(title="Top 10 ITQ Procurement Descriptions, 2017-2022",y="Count",x="Description")+theme(plot.title = element_text(hjust = 0.5))+theme(axis.text.x=element_text(size=6))
+# 
+# bot_10_itq_description<-tail(itq_description_summary,n=10)
+# 
+# ggplot(data=bot_10_itq_description,aes(x=reorder(`Procurement Description`,-Count), y=Count))+geom_bar(stat="identity")+geom_text(aes(label = Count), vjust = 1.5, colour = "white")+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+labs(title="Bottom 10 ITQ Procurement Descriptions, 2017-2022",y="Count",x="Description")+theme(plot.title = element_text(hjust = 0.5))+theme(axis.text.x=element_text(size=6))
+# 
+# ```
+# 
+# ```{r,echo=FALSE}
+# 
+# 
+# ###ITQ Supplier Analysis, 2017-2022
+# itq_supplier<- df_itq 
+# 
+# itq_supplier_summary<-as.factor(itq_supplier$Supplier)
+# 
+# itq_supplier_summary<-as.data.frame(summary(itq_supplier$Supplier))
+# 
+# suppliers<-c(levels(itq_supplier$Supplier))
+# 
+# counts<-itq_supplier_summary[,1]
+# 
+# itq_supplier_summary<-cbind(Suppliers=suppliers,Count=counts)
+# 
+# itq_supplier_summary<-as.data.frame(itq_supplier_summary)
+# 
+# itq_supplier_summary$Count<-as.numeric(itq_supplier_summary$Count)
+# 
+# itq_supplier_summary<-itq_supplier_summary[order(itq_supplier_summary$Count,decreasing=TRUE),]
+# 
+# 
+# 
+# top_10_itq_supplier<-head(itq_supplier_summary,n=10)
+# 
+# 
+# ggplot(data=top_10_itq_supplier,aes(x=reorder(Suppliers,-Count), y=Count))+geom_bar(stat="identity")+geom_text(aes(label = Count), vjust = 1.5, colour = "white")+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+labs(title="Top 10 ITQ Procurement Suppliers, 2017-2022",y="Count",x="Suppliers")+theme(plot.title = element_text(hjust = 0.5))+theme(axis.text.x=element_text(size=6))
+# 
+# bot_10_itq_supplier<-tail(itq_supplier_summary,n=10)
+# 
+# ggplot(data=bot_10_itq_supplier,aes(x=reorder(Suppliers,-Count), y=Count))+geom_bar(stat="identity")+geom_text(aes(label = Count), vjust = 1.5, colour = "white")+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+labs(title="Bottom 10 ITQ Procurement Suppliers, 2017-2022",y="Count",x="Suppliers")+theme(plot.title = element_text(hjust = 0.5))+theme(axis.text.x=element_text(size=6))
+# 
+# 
+
+```

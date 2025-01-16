@@ -1,0 +1,194 @@
+---
+title: "AGO Data Challenge"
+author: "Nicholas Chung"
+date: "2023-09-08"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load and Clean Data
+
+```{r, echo=FALSE}
+library(dplyr)
+library(data.table)
+##To deal with dates, need tidyverse package. Install it only once if you haven't
+#install.packages("tidyverse")
+library(lubridate)
+col_names=c("SN","Code","Type","Agency","Description","Date","Supplier","Amount")
+
+#Load csv using fread into a dataframe
+df<-fread("../data/DC23 Prelim Round Dataset (Final).csv",skip=1,header=FALSE,col.names=col_names)
+
+##See the structure
+#str(df)
+
+##Turn Type, Agency, Description into factors
+df$Type<-as.factor(df$Type)
+df$Agency<-as.factor(df$Agency)
+df$Description<-as.factor(df$Description)
+
+##Convert date into date class and datetime format. Add year, month, and day rows
+df$Date<-dmy(df$Date)
+df$Year<-year(df$Date)
+df$Month<-month(df$Date)
+df$Day<-mday(df$Date)
+
+
+##Remove $ and , sign in amount and convert to numeric
+df$Amount<-gsub('\\$','',df$Amount)
+df$Amount<-gsub(',','',df$Amount)
+df$Amount<-as.numeric(df$Amount)
+
+# str(df)
+# 
+# head(df)
+
+```
+
+##Data Cleaning and Anomaly Finding
+
+There is 1 row, SN 1 that had its procurement date before 2017. There are 2 rows, SN6999 and SN7000 that have their procurement dates in 2023 and 2024 respectively. These data points should not be considered as the dataset covers awards between 1 January 2017 and 31 December 2022.
+
+There are 10 projects listed in ITQ that fall below $10,000 in amount awarded.
+
+```{r}
+##Find any missing/NA values first. Don't have so can continue :)
+
+#sum(is.na(df))
+
+
+##Check for dates that lie outside of 2017-2022, and filter dates
+
+
+before_2017<-df[year(Date)<2017,]
+#before_2017
+
+after_2022<-df[year(df$Date)>2022,]
+#after_2022
+
+df<-df %>% filter(between(df$Date, as.Date('2017-01-01'), as.Date('2022-12-31')))
+#head(df)
+#tail(df)
+
+##Unfinished: Check that dates are valid
+
+date_checker<-function(y,m,d){
+  months_31=c(1,3,5,7,8,10,12)
+  months_30=c(4,6,9,11)
+  
+  if(!between(m,1,12) |!between(d,1,31)){
+    return(FALSE)
+  }
+  if (y==2020){
+    if (m==2){
+      ifelse (between(d,1,29),TRUE,FALSE)
+    }
+  }
+  
+  if (m %in% months_31){
+    ifelse(between(d,1,31),TRUE,FALSE)}
+  else if (m %in% months_30){
+    ifelse(between(d,1,30),TRUE,FALSE)}
+  else if (m==2){
+    ifelse(between(d,1,28),TRUE,FALSE)}
+
+}
+
+# new_df<-data.frame()
+# 
+# for (arow in df){
+#   year=arow[9]
+#   month=arow[10]
+#   day=arow[11]
+#   if(date_checker(year,month,day)){
+#     new_df<-rbind(new_df,arow)
+#   }
+# }
+# 
+# new_df
+
+
+
+##Check for repeated procurement codes. Zero so nothing to report here
+
+duplicated_codes<-sum(duplicated(df$Code))
+#duplicated_codes
+
+##Checked that all procurement codes have same length (are valid)
+
+code_length<-as.factor(nchar(df$Code))
+#code_length
+
+##Check that all procurement codes have correct format. All fit the format (3 alphabets + 8 numeric)
+
+wrong_code_format<-df[!grep("[[:alpha:]]{3}[0-9]{8}",df$Code),]
+
+#wrong_code_format
+
+##Check if procurement type matches procurement code initials. Also zero so nothing to report here
+proc_init_checker<-function(proc_code,proc_type){
+  proc_code_initial=substring(proc_code,1,3)
+  ifelse (proc_code_initial==proc_type,TRUE,FALSE)
+}
+
+type_code_unmatch<-sum(!proc_init_checker(df$Code,df$Type))
+#type_code_unmatch
+
+##Check the 20 different factors in Description. See if any similar ones but written differently. All seem different enough so
+
+#levels(df$Description)
+
+##Check for unique Supplier (i.e. whether any was awarded to more than one supplier)
+
+#unique(df$Supplier)
+
+##Undone: Check amount awarded if it falls within ITT, ITQ range respectively. Only got ITQ below 10k
+df_itt<-df[df$Type=="ITT",]
+df_itq<-df[df$Type=="ITQ",]
+
+
+itq_above_100k<-df_itq[df_itq$Amount>100000,]
+#itq_above_100k
+itq_below_10k<-df_itq[df_itq$Amount<=10000,]
+#itq_below_10k
+
+itt_below_100k<-df_itt[df_itt$Amount<=100000,]
+#itt_below_100k
+
+##Question: Should we remove the ITQ below 10k? Or add it to recommendations saying that these should use SVP instead? Because the document doesn't explicitly state that below 10k cannot use ITQ
+
+
+
+
+
+##Create function that checks for rows with same date and same amount awarded, if same check if both are similar enough to be duplicates. Checked that there are none.
+
+
+same_date <- df %>% filter(duplicated(df$Date))
+
+same_date_amt <-same_date %>% filter(duplicated(same_date$Amount))
+
+same_date_amt<-same_date_amt[order(same_date_amt$Date,same_date_amt$Amount),]
+
+same_date_amt<-same_date_amt[order(same_date_amt$Amount,same_date_amt$Date),]
+
+#same_date_amt
+
+```
+## General Stats
+
+From observing the structure, we can see that there are 2 types of procurement in the data, ITT and ITQ.
+
+There are also 15 different types of agencies, and 20 different categories of procurement description.
+
+```{r}
+#Find number of suppliers
+#df %>% count(Supplier,sort=TRUE)
+#Find number of projects per year
+# for (i in 2017:2022){
+#   print(df[df$])
+# }
+```
